@@ -1,8 +1,9 @@
-import type { ActionRecord, ModelConfig, PlanResult } from '../types.js';
+import type { ModelConfig, PlanResult } from '../types.js';
 import { type ChatMessage, buildImageContent, callAI } from './call-ai.js';
+import { ConversationHistory } from './conversation-history.js';
 import { parsePlanningResponse } from './xml-parser.js';
 
-const SYSTEM_PROMPT = `你是一个 Android UI 自动化助手。
+export const SYSTEM_PROMPT = `你是一个 Android UI 自动化助手。
 你将收到一个截图和页面的 accessibility tree，你需要根据用户指令规划下一步操作。
 
 ## 可用操作
@@ -42,36 +43,11 @@ const SYSTEM_PROMPT = `你是一个 Android UI 自动化助手。
 - 不要重复执行已经成功的步骤
 - 如果收到 <error-feedback>，说明上一步执行出错了，请尝试不同的操作策略`;
 
-const MAX_HISTORY_KEEP = 15;
-
-function formatHistory(history: ActionRecord[]): string {
-  if (history.length === 0) return '';
-
-  const omitted = history.length > MAX_HISTORY_KEEP
-    ? history.length - MAX_HISTORY_KEEP
-    : 0;
-
-  const kept = omitted > 0 ? history.slice(-MAX_HISTORY_KEEP) : history;
-
-  const lines: string[] = [];
-  if (omitted > 0) {
-    lines.push(`(${omitted} earlier steps omitted)`);
-  }
-
-  kept.forEach((record, i) => {
-    const stepNum = omitted + i + 1;
-    const paramStr = JSON.stringify(record.action.param);
-    lines.push(`Step ${stepNum}: ${record.action.type}(${paramStr}) → ${record.result}`);
-  });
-
-  return `\n<previous-actions>\n${lines.join('\n')}\n</previous-actions>`;
-}
-
 export async function plan(
   instruction: string,
   screenshot: string,
   a11yTree: string,
-  history: ActionRecord[],
+  history: ConversationHistory,
   config: ModelConfig,
   errorFeedback?: string,
 ): Promise<PlanResult> {
@@ -83,33 +59,30 @@ export async function plan(
     userContent.push(`\n<accessibility-tree>\n${a11yTree}\n</accessibility-tree>`);
   }
 
-  const historyStr = formatHistory(history);
-  if (historyStr) {
-    userContent.push(historyStr);
+  const logsStr = history.formatLogs();
+  if (logsStr) {
+    userContent.push(logsStr);
   }
 
   if (errorFeedback) {
     userContent.push(`\n<error-feedback>${errorFeedback}</error-feedback>`);
   }
 
-  const messages: ChatMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    {
-      role: 'user',
-      content: [
-        { type: 'text', text: userContent.join('\n') },
-        buildImageContent(screenshot),
-      ],
-    },
-  ];
+  history.addUserTurn(userContent.join('\n'), screenshot);
+
+  const messages = history.snapshot();
 
   let response = await callAI({ messages, config });
   try {
-    return parsePlanningResponse(response);
+    const result = parsePlanningResponse(response);
+    history.addAssistantResponse(response);
+    return result;
   } catch {
     console.warn('[nmi] Failed to parse planning response, retrying LLM call...');
     response = await callAI({ messages, config });
-    return parsePlanningResponse(response);
+    const result = parsePlanningResponse(response);
+    history.addAssistantResponse(response);
+    return result;
   }
 }
 

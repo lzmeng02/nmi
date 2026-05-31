@@ -1,7 +1,8 @@
 import type { ModelConfig } from '../types.js';
-import { plan } from '../ai/planning.js';
+import { plan, SYSTEM_PROMPT } from '../ai/planning.js';
+import { ConversationHistory } from '../ai/conversation-history.js';
 import { AndroidDevice } from '../device/android-device.js';
-import type { ActionRecord, ActionResult, PlanAction, PlanResult, Size } from '../types.js';
+import type { ActionResult, CycleRecord, ExecutionCallbacks, PlanAction, PlanResult, Size } from '../types.js';
 
 export interface ActionDelays {
   delayBeforeAction?: number;
@@ -18,6 +19,8 @@ export interface TaskExecutorOptions {
   taskTimeout?: number;
   abortSignal?: AbortSignal;
   actionDelays?: ActionDelays;
+  captureEndState?: boolean;
+  callbacks?: ExecutionCallbacks;
 }
 
 const DEFAULT_DELAYS: Required<ActionDelays> = {
@@ -35,6 +38,8 @@ export class TaskExecutor {
   private taskTimeout: number;
   private abortSignal?: AbortSignal;
   private delays: Required<ActionDelays>;
+  private captureEndState: boolean;
+  private callbacks?: ExecutionCallbacks;
 
   constructor(options: TaskExecutorOptions) {
     this.device = options.device;
@@ -44,6 +49,8 @@ export class TaskExecutor {
     this.taskTimeout = options.taskTimeout ?? 0;
     this.abortSignal = options.abortSignal;
     this.delays = { ...DEFAULT_DELAYS, ...options.actionDelays };
+    this.captureEndState = options.captureEndState ?? true;
+    this.callbacks = options.callbacks;
   }
 
   private checkAbort(): void {
@@ -53,20 +60,24 @@ export class TaskExecutor {
   }
 
   async runAction(instruction: string): Promise<ActionResult> {
-    const history: ActionRecord[] = [];
+    const history = new ConversationHistory();
+    history.seed(SYSTEM_PROMPT);
+
+    const cycles: CycleRecord[] = [];
     let errorCount = 0;
     let pendingErrorFeedback: string | undefined;
+    let stepNum = 0;
     const startTime = Date.now();
 
     for (let cycle = 0; cycle < this.maxReplanCycles; cycle++) {
       this.checkAbort();
 
       if (this.taskTimeout > 0 && Date.now() - startTime > this.taskTimeout) {
-        return {
-          success: false,
+        return this.buildResult(false, cycles, startTime, {
           message: `Task timed out after ${this.taskTimeout}ms`,
-        };
+        });
       }
+
       const screenshot = await this.device.screenshot();
       let a11yTree = '';
       try {
@@ -83,55 +94,125 @@ export class TaskExecutor {
         const msg = error instanceof Error ? error.message : String(error);
         errorCount++;
         pendingErrorFeedback = `Planning failed: ${msg}`;
+
+        cycles.push({
+          thought: '',
+          result: 'failed',
+          error: msg,
+          timestamp: Date.now(),
+        });
+        this.callbacks?.onError?.(msg, cycle);
+
         if (errorCount >= this.maxConsecutiveErrors) {
-          return {
-            success: false,
+          return this.buildResult(false, cycles, startTime, {
             message: `Aborted: ${this.maxConsecutiveErrors} consecutive failures. Last error: ${msg}`,
-          };
+          });
         }
         continue;
       }
 
       if (planResult.complete) {
-        return {
-          success: planResult.success,
+        cycles.push({
+          thought: planResult.thought,
+          result: planResult.success ? 'success' : 'failed',
+          message: planResult.message,
+          timestamp: Date.now(),
+        } as CycleRecord);
+
+        this.callbacks?.onCycleComplete?.(cycles[cycles.length - 1], cycle);
+
+        return this.buildResult(planResult.success, cycles, startTime, {
           thought: planResult.thought,
           message: planResult.message,
-        };
+        });
       }
 
       if (!planResult.action) {
-        return {
-          success: false,
+        cycles.push({
+          thought: planResult.thought,
+          result: 'skipped',
+          timestamp: Date.now(),
+        });
+        this.callbacks?.onCycleComplete?.(cycles[cycles.length - 1], cycle);
+
+        return this.buildResult(false, cycles, startTime, {
           thought: planResult.thought,
           message: 'No action returned from planner',
-        };
+        });
       }
+
+      this.callbacks?.onAction?.(planResult.action);
 
       try {
         await this.executeAction(planResult.action);
-        history.push({ action: planResult.action, result: 'success' });
+        stepNum++;
+        const paramStr = JSON.stringify(planResult.action.param);
+        history.appendLog(`Step ${stepNum}: ${planResult.action.type}(${paramStr}) → success`);
+
+        cycles.push({
+          thought: planResult.thought,
+          action: planResult.action,
+          result: 'success',
+          timestamp: Date.now(),
+        });
         errorCount = 0;
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         errorCount++;
-        history.push({ action: planResult.action, result: `failed: ${msg}` });
-        pendingErrorFeedback = `Action ${planResult.action.type}(${JSON.stringify(planResult.action.param)}) failed: ${msg}. Try a different approach.`;
+        stepNum++;
+        const paramStr = JSON.stringify(planResult.action.param);
+        history.appendLog(`Step ${stepNum}: ${planResult.action.type}(${paramStr}) → failed: ${msg}`);
+        pendingErrorFeedback = `Action ${planResult.action.type}(${paramStr}) failed: ${msg}. Try a different approach.`;
+
+        cycles.push({
+          thought: planResult.thought,
+          action: planResult.action,
+          result: 'failed',
+          error: msg,
+          timestamp: Date.now(),
+        });
+        this.callbacks?.onError?.(msg, cycle);
 
         if (errorCount >= this.maxConsecutiveErrors) {
-          return {
-            success: false,
+          return this.buildResult(false, cycles, startTime, {
             thought: planResult.thought,
             message: `Aborted: ${this.maxConsecutiveErrors} consecutive execution failures. Last error: ${msg}`,
-          };
+          });
         }
       }
+
+      this.callbacks?.onCycleComplete?.(cycles[cycles.length - 1], cycle);
     }
 
-    return {
-      success: false,
+    return this.buildResult(false, cycles, startTime, {
       message: `Exceeded maximum replan cycles (${this.maxReplanCycles})`,
+    });
+  }
+
+  private async buildResult(
+    success: boolean,
+    cycles: CycleRecord[],
+    startTime: number,
+    extra: { thought?: string; message?: string },
+  ): Promise<ActionResult> {
+    const result: ActionResult = {
+      success,
+      thought: extra.thought,
+      message: extra.message,
+      cycles,
+      duration: Date.now() - startTime,
     };
+
+    if (this.captureEndState) {
+      try {
+        result.screenshotAfter = await this.device.screenshot();
+      } catch { /* ignore */ }
+      try {
+        result.a11yTreeAfter = await this.device.getA11yTree();
+      } catch { /* ignore */ }
+    }
+
+    return result;
   }
 
   private clampX(x: number, screen: Size): number {
