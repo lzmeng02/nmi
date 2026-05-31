@@ -1,7 +1,9 @@
 import { getMaxReplanCycles, getModelConfig, getScreenshotQuality, getDeviceSerial } from '../config.js';
 import { assertAI, queryAI } from '../ai/planning.js';
 import { AndroidDevice } from '../device/android-device.js';
-import type { ActionResult, AgentOptions, ModelConfig } from '../types.js';
+import { parseA11yXml } from '../device/a11y-tree.js';
+import { findElement, findAllElements, getElementCenter } from '../device/a11y-selector.js';
+import type { ActionResult, AgentOptions, A11yNode, A11ySelector, ModelConfig, Size } from '../types.js';
 import { TaskExecutor } from './task-executor.js';
 
 export class Agent {
@@ -24,8 +26,12 @@ export class Agent {
       taskTimeout: options.taskTimeout,
       abortSignal: options.abortSignal,
       actionDelays: options.actionDelays,
+      captureEndState: options.captureEndState,
+      callbacks: options.callbacks,
     });
   }
+
+  // --- AI-driven methods ---
 
   async aiAct(instruction: string): Promise<ActionResult> {
     return this.executor.runAction(instruction);
@@ -79,8 +85,81 @@ export class Agent {
     throw new Error(`Timeout waiting for condition: "${condition}" (${timeout}ms)`);
   }
 
+  // --- Direct device access (no LLM) ---
+
   async screenshot(): Promise<string> {
     return this.device.screenshot();
+  }
+
+  async getA11yTree(): Promise<string> {
+    return this.device.getA11yTree();
+  }
+
+  async getA11yTreeRaw(): Promise<A11yNode> {
+    const xml = await this.device.dumpUI();
+    return parseA11yXml(xml);
+  }
+
+  async getScreenSize(): Promise<Size> {
+    return this.device.getScreenSize();
+  }
+
+  // --- Deterministic actions (no LLM) ---
+
+  async tap(x: number, y: number): Promise<void> {
+    await this.device.tap(x, y);
+  }
+
+  async tapElement(selector: A11ySelector): Promise<void> {
+    const root = await this.getA11yTreeRaw();
+    const node = findElement(root, selector);
+    if (!node) {
+      throw new Error(`Element not found: ${JSON.stringify(selector)}`);
+    }
+    const center = getElementCenter(node);
+    await this.device.tap(center.x, center.y);
+  }
+
+  async findElement(selector: A11ySelector): Promise<A11yNode | null> {
+    const root = await this.getA11yTreeRaw();
+    return findElement(root, selector);
+  }
+
+  async findAllElements(selector: A11ySelector): Promise<A11yNode[]> {
+    const root = await this.getA11yTreeRaw();
+    return findAllElements(root, selector);
+  }
+
+  async input(text: string): Promise<void> {
+    await this.device.input(text);
+  }
+
+  async clearInput(length?: number): Promise<void> {
+    await this.device.clearInput(length);
+  }
+
+  async swipe(x1: number, y1: number, x2: number, y2: number, duration?: number): Promise<void> {
+    await this.device.swipe(x1, y1, x2, y2, duration);
+  }
+
+  async scroll(direction: 'up' | 'down' | 'left' | 'right'): Promise<void> {
+    await this.device.scroll(direction);
+  }
+
+  async back(): Promise<void> {
+    await this.device.back();
+  }
+
+  async home(): Promise<void> {
+    await this.device.home();
+  }
+
+  async keyEvent(code: number | string): Promise<void> {
+    await this.device.keyEvent(code);
+  }
+
+  async launchApp(packageName: string): Promise<void> {
+    await this.device.launchApp(packageName);
   }
 
   async destroy(): Promise<void> {

@@ -21,6 +21,14 @@ export interface AgentOptions {
     delayAfterInput?: number;
     delayAfterSwipe?: number;
   };
+  captureEndState?: boolean;
+  callbacks?: ExecutionCallbacks;
+}
+
+export interface ExecutionCallbacks {
+  onCycleComplete?: (cycle: CycleRecord, cycleIndex: number) => void;
+  onAction?: (action: PlanAction) => void;
+  onError?: (error: string, cycleIndex: number) => void;
 }
 
 export interface Size {
@@ -65,10 +73,29 @@ export interface ActionRecord {
   result: string;
 }
 
+export interface CycleRecord {
+  thought: string;
+  action?: PlanAction;
+  result: 'success' | 'failed' | 'skipped';
+  error?: string;
+  timestamp: number;
+}
+
 export interface ActionResult {
   success: boolean;
   thought?: string;
   message?: string;
+  cycles: CycleRecord[];
+  duration: number;
+  screenshotAfter?: string;
+  a11yTreeAfter?: string;
+}
+
+export interface A11ySelector {
+  resourceId?: string;
+  text?: string;
+  contentDesc?: string;
+  className?: string;
 }
 
 export interface TestStep {

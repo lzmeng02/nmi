@@ -40,6 +40,10 @@ export class AndroidDevice {
     return compressA11yTree(root, screenSize);
   }
 
+  async dumpUI(): Promise<string> {
+    return this.adb.dumpUI();
+  }
+
   async tap(x: number, y: number): Promise<void> {
     await this.adb.tap(x, y);
   }
