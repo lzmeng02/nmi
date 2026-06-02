@@ -1,7 +1,7 @@
 import type { ModelConfig, PlanResult } from '../types.js';
 import { type ChatMessage, buildImageContent, callAI } from './call-ai.js';
 import { ConversationHistory } from './conversation-history.js';
-import { parsePlanningResponse } from './xml-parser.js';
+import { extractXMLTag, parsePlanningResponse } from './xml-parser.js';
 
 export const SYSTEM_PROMPT = `你是一个 Android UI 自动化助手。
 你将收到一个截图和页面的 accessibility tree，你需要根据用户指令规划下一步操作。
@@ -131,14 +131,13 @@ export async function assertAI(
 
   const response = await callAI({ messages, config });
 
-  const thought =
-    (() => {
-      const match = response.match(/<thought>([\s\S]*?)<\/thought>/);
-      return match?.[1]?.trim();
-    })() ?? response;
+  return parseAssertResponse(response);
+}
 
-  const resultMatch = response.match(/<result>\s*(pass|fail)\s*<\/result>/i);
-  const pass = resultMatch ? resultMatch[1].toLowerCase() === 'pass' : !response.toLowerCase().includes('fail');
+export function parseAssertResponse(response: string): { pass: boolean; thought: string } {
+  const thought = extractXMLTag(response, 'thought') ?? response;
+  const resultStr = extractXMLTag(response, 'result')?.trim().toLowerCase();
+  const pass = resultStr === 'pass';
 
   return { pass, thought };
 }

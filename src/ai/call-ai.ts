@@ -15,14 +15,39 @@ export interface CallAIOptions {
   config: ModelConfig;
 }
 
+const clientCache = new Map<string, OpenAI>();
+
+function getClient(config: ModelConfig): OpenAI {
+  const key = `${config.baseURL}|${config.apiKey}|${config.timeout ?? 60000}`;
+  let client = clientCache.get(key);
+  if (!client) {
+    client = new OpenAI({
+      apiKey: config.apiKey,
+      baseURL: config.baseURL,
+      timeout: config.timeout ?? 60000,
+    });
+    clientCache.set(key, client);
+  }
+  return client;
+}
+
+export function isRetryable(error: unknown): boolean {
+  if (error instanceof OpenAI.APIUserAbortError) {
+    return false;
+  }
+  if (error instanceof OpenAI.APIConnectionError) {
+    return true;
+  }
+  if (error instanceof OpenAI.APIError) {
+    const status = error.status;
+    return status === 408 || status === 409 || status === 429 || (status !== undefined && status >= 500);
+  }
+  return true;
+}
+
 export async function callAI(options: CallAIOptions): Promise<string> {
   const { messages, config } = options;
-
-  const client = new OpenAI({
-    apiKey: config.apiKey,
-    baseURL: config.baseURL,
-    timeout: config.timeout ?? 60000,
-  });
+  const client = getClient(config);
 
   const maxRetries = 3;
   let lastError: Error | null = null;
@@ -43,6 +68,7 @@ export async function callAI(options: CallAIOptions): Promise<string> {
       return content;
     } catch (error) {
       lastError = error as Error;
+      if (!isRetryable(error)) throw lastError;
       if (attempt < maxRetries - 1) {
         const delay = Math.pow(2, attempt) * 1000;
         await new Promise((resolve) => setTimeout(resolve, delay));
