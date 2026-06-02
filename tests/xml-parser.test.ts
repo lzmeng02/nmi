@@ -89,14 +89,13 @@ describe('parsePlanningResponse', () => {
     expect(result.action).toEqual({ type: 'Input', param: { text: 'hello' } });
   });
 
-  it('falls back to empty param on invalid JSON', () => {
+  it('throws on invalid action JSON', () => {
     const text = `
       <thought>tap</thought>
       <action-type>Tap</action-type>
       <action-param-json>{broken json}</action-param-json>
     `;
-    const result = parsePlanningResponse(text);
-    expect(result.action!.param).toEqual({});
+    expect(() => parsePlanningResponse(text)).toThrow('Invalid JSON in <action-param-json>');
   });
 
   it('handles missing action-param-json', () => {
@@ -106,6 +105,24 @@ describe('parsePlanningResponse', () => {
     `;
     const result = parsePlanningResponse(text);
     expect(result.action).toEqual({ type: 'Back', param: {} });
+  });
+
+  it('throws when required action parameters are missing', () => {
+    const text = `
+      <thought>tap</thought>
+      <action-type>Tap</action-type>
+      <action-param-json>{}</action-param-json>
+    `;
+    expect(() => parsePlanningResponse(text)).toThrow('Invalid Tap action parameter');
+  });
+
+  it('throws when required action parameters have the wrong type', () => {
+    const text = `
+      <thought>type</thought>
+      <action-type>Input</action-type>
+      <action-param-json>{"text": 123}</action-param-json>
+    `;
+    expect(() => parsePlanningResponse(text)).toThrow('Invalid Input action parameter');
   });
 
   it('parses self-closing complete with success=true', () => {
@@ -140,15 +157,34 @@ describe('parsePlanningResponse', () => {
     expect(result.message).toBe('Task failed because element not found');
   });
 
-  it('parses content complete without "fail" as success', () => {
+  it('parses content complete with success=true attribute', () => {
     const text = `
       <thought>All good</thought>
-      <complete>Task completed successfully</complete>
+      <complete success="true">Task completed successfully</complete>
     `;
     const result = parsePlanningResponse(text);
     expect(result.complete).toBe(true);
     expect(result.success).toBe(true);
     expect(result.message).toBe('Task completed successfully');
+  });
+
+  it('parses content complete with success=false attribute', () => {
+    const text = `
+      <thought>Stuck</thought>
+      <complete success="false">任务失败：找不到元素</complete>
+    `;
+    const result = parsePlanningResponse(text);
+    expect(result.complete).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.message).toBe('任务失败：找不到元素');
+  });
+
+  it('does not treat ambiguous complete content as success', () => {
+    const text = `
+      <thought>All good</thought>
+      <complete>Task completed successfully</complete>
+    `;
+    expect(() => parsePlanningResponse(text)).toThrow('Missing or invalid success attribute');
   });
 
   it('ignores complete when action is also present', () => {
@@ -167,6 +203,15 @@ describe('parsePlanningResponse', () => {
     expect(() => parsePlanningResponse('<thought>confused</thought>')).toThrow(
       'Failed to parse action or complete tag',
     );
+  });
+
+  it('throws on unknown action type', () => {
+    const text = `
+      <thought>custom action</thought>
+      <action-type>Click</action-type>
+      <action-param-json>{"x": 1, "y": 2}</action-param-json>
+    `;
+    expect(() => parsePlanningResponse(text)).toThrow('Unknown action type from AI');
   });
 
   it('defaults thought to empty string when missing', () => {

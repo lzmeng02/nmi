@@ -81,8 +81,7 @@ export class ADB {
 
   async dumpUI(): Promise<string> {
     await this.shell('uiautomator dump /sdcard/window_dump.xml');
-    const xml = await this.shell('cat /sdcard/window_dump.xml');
-    return xml;
+    return this.shell('cat /sdcard/window_dump.xml');
   }
 
   async getDevices(): Promise<string[]> {

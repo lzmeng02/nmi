@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatMessageContent } from './call-ai.js';
+import { buildImageContent } from './call-ai.js';
 
 export interface ConversationHistoryOptions {
   maxMessages?: number;
@@ -7,9 +8,17 @@ export interface ConversationHistoryOptions {
   maxA11yTrees?: number;
 }
 
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 const A11Y_TREE_OPEN = '<accessibility-tree>';
 const A11Y_TREE_CLOSE = '</accessibility-tree>';
 const A11Y_TREE_PLACEHOLDER = '<accessibility-tree>(omitted)</accessibility-tree>';
+const A11Y_TREE_REGEX = new RegExp(
+  `${escapeRegex(A11Y_TREE_OPEN)}[\\s\\S]*?${escapeRegex(A11Y_TREE_CLOSE)}`,
+  'g',
+);
 
 export class ConversationHistory {
   private messages: ChatMessage[] = [];
@@ -36,10 +45,7 @@ export class ConversationHistory {
       role: 'user',
       content: [
         { type: 'text', text },
-        {
-          type: 'image_url',
-          image_url: { url: `data:image/jpeg;base64,${screenshot}`, detail: 'high' },
-        },
+        buildImageContent(screenshot),
       ],
     });
   }
@@ -124,16 +130,9 @@ export class ConversationHistory {
 
         treeCount++;
         if (treeCount > this.maxA11yTrees) {
-          part.text = part.text.replace(
-            new RegExp(`${escapeRegex(A11Y_TREE_OPEN)}[\\s\\S]*?${escapeRegex(A11Y_TREE_CLOSE)}`, 'g'),
-            A11Y_TREE_PLACEHOLDER,
-          );
+          part.text = part.text.replace(A11Y_TREE_REGEX, A11Y_TREE_PLACEHOLDER);
         }
       }
     }
   }
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
