@@ -46,26 +46,13 @@ export class Agent {
   }
 
   async aiAssert(assertion: string): Promise<{ pass: boolean; thought: string }> {
-    const screenshot = await this.device.screenshot();
-    let a11yTree = '';
-    try {
-      a11yTree = await this.device.getA11yTree();
-    } catch {
-      // proceed without a11y tree
-    }
+    const [screenshot, a11yTree] = await this.captureState();
     return assertAI(assertion, screenshot, a11yTree, this.config);
   }
 
-  async aiQuery<T = string>(question: string): Promise<T> {
-    const screenshot = await this.device.screenshot();
-    let a11yTree = '';
-    try {
-      a11yTree = await this.device.getA11yTree();
-    } catch {
-      // proceed without a11y tree
-    }
-    const result = await queryAI(question, screenshot, a11yTree, this.config);
-    return result as T;
+  async aiQuery(question: string): Promise<string> {
+    const [screenshot, a11yTree] = await this.captureState();
+    return queryAI(question, screenshot, a11yTree, this.config);
   }
 
   async aiWaitFor(
@@ -83,6 +70,14 @@ export class Agent {
     }
 
     throw new Error(`Timeout waiting for condition: "${condition}" (${timeout}ms)`);
+  }
+
+  private async captureState(): Promise<[string, string]> {
+    const [screenshot, a11yTree] = await Promise.all([
+      this.device.screenshot(),
+      this.device.getA11yTree().catch(() => ''),
+    ]);
+    return [screenshot, a11yTree];
   }
 
   // --- Direct device access (no LLM) ---

@@ -7,6 +7,13 @@ export interface ModelConfig {
   timeout?: number;
 }
 
+export interface ActionDelays {
+  delayBeforeAction?: number;
+  delayAfterAction?: number;
+  delayAfterInput?: number;
+  delayAfterSwipe?: number;
+}
+
 export interface AgentOptions {
   serial?: string;
   model?: Partial<ModelConfig>;
@@ -15,12 +22,7 @@ export interface AgentOptions {
   screenshotQuality?: number;
   taskTimeout?: number;
   abortSignal?: AbortSignal;
-  actionDelays?: {
-    delayBeforeAction?: number;
-    delayAfterAction?: number;
-    delayAfterInput?: number;
-    delayAfterSwipe?: number;
-  };
+  actionDelays?: ActionDelays;
   captureEndState?: boolean;
   callbacks?: ExecutionCallbacks;
 }
@@ -77,6 +79,7 @@ export interface CycleRecord {
   thought: string;
   action?: PlanAction;
   result: 'success' | 'failed' | 'skipped';
+  message?: string;
   error?: string;
   timestamp: number;
 }

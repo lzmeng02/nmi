@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 import type { TestCase, TestStep } from '../types.js';
 
 export function readTestCases(filePath: string): TestCase[] {
-  const workbook = XLSX.readFile(filePath);
+  const workbook = XLSX.readFile(filePath, { sheets: 0 });
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '' });

@@ -2,14 +2,9 @@ import type { ModelConfig } from '../types.js';
 import { plan, SYSTEM_PROMPT } from '../ai/planning.js';
 import { ConversationHistory } from '../ai/conversation-history.js';
 import { AndroidDevice } from '../device/android-device.js';
-import type { ActionResult, CycleRecord, ExecutionCallbacks, PlanAction, PlanResult, Size } from '../types.js';
+import type { ActionDelays, ActionResult, CycleRecord, ExecutionCallbacks, PlanAction, PlanResult, Size } from '../types.js';
 
-export interface ActionDelays {
-  delayBeforeAction?: number;
-  delayAfterAction?: number;
-  delayAfterInput?: number;
-  delayAfterSwipe?: number;
-}
+export type { ActionDelays };
 
 export interface TaskExecutorOptions {
   device: AndroidDevice;
@@ -78,13 +73,10 @@ export class TaskExecutor {
         });
       }
 
-      const screenshot = await this.device.screenshot();
-      let a11yTree = '';
-      try {
-        a11yTree = await this.device.getA11yTree();
-      } catch {
-        // a11y tree unavailable, proceed with screenshot only
-      }
+      const [screenshot, a11yTree] = await Promise.all([
+        this.device.screenshot(),
+        this.device.getA11yTree().catch(() => ''),
+      ]);
 
       let planResult: PlanResult;
       try {
@@ -117,7 +109,7 @@ export class TaskExecutor {
           result: planResult.success ? 'success' : 'failed',
           message: planResult.message,
           timestamp: Date.now(),
-        } as CycleRecord);
+        });
 
         this.callbacks?.onCycleComplete?.(cycles[cycles.length - 1], cycle);
 
@@ -204,23 +196,19 @@ export class TaskExecutor {
     };
 
     if (this.captureEndState) {
-      try {
-        result.screenshotAfter = await this.device.screenshot();
-      } catch { /* ignore */ }
-      try {
-        result.a11yTreeAfter = await this.device.getA11yTree();
-      } catch { /* ignore */ }
+      const [screenshot, a11yTree] = await Promise.all([
+        this.device.screenshot().catch(() => undefined),
+        this.device.getA11yTree().catch(() => undefined),
+      ]);
+      result.screenshotAfter = screenshot;
+      result.a11yTreeAfter = a11yTree;
     }
 
     return result;
   }
 
-  private clampX(x: number, screen: Size): number {
-    return Math.max(0, Math.min(Math.round(x), screen.width - 1));
-  }
-
-  private clampY(y: number, screen: Size): number {
-    return Math.max(0, Math.min(Math.round(y), screen.height - 1));
+  private clamp(value: number, max: number): number {
+    return Math.max(0, Math.min(Math.round(value), max - 1));
   }
 
   private async executeAction(action: PlanAction): Promise<void> {
@@ -234,8 +222,8 @@ export class TaskExecutor {
     switch (type) {
       case 'Tap':
         await this.device.tap(
-          this.clampX(param.x as number, screen),
-          this.clampY(param.y as number, screen),
+          this.clamp(param.x as number, screen.width),
+          this.clamp(param.y as number, screen.height),
         );
         break;
 
@@ -245,10 +233,10 @@ export class TaskExecutor {
 
       case 'Swipe':
         await this.device.swipe(
-          this.clampX(param.x1 as number, screen),
-          this.clampY(param.y1 as number, screen),
-          this.clampX(param.x2 as number, screen),
-          this.clampY(param.y2 as number, screen),
+          this.clamp(param.x1 as number, screen.width),
+          this.clamp(param.y1 as number, screen.height),
+          this.clamp(param.x2 as number, screen.width),
+          this.clamp(param.y2 as number, screen.height),
           (param.duration as number) ?? 300,
         );
         break;
